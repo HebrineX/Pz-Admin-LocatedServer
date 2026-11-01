@@ -1,1 +1,16 @@
 .hebrinex/
+
+# Datos que crean la app y el instalador al usarse en esta carpeta
+data/
+logs/
+server/
+steamcmd/
+
+# Compilación (crear_exe.bat / empaquetar.bat)
+build/
+dist/
+__pycache__/
+
+# Respaldos
+*.bak
+*.tmp

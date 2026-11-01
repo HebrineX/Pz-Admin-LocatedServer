@@ -5,8 +5,8 @@ App de escritorio para instalar, configurar y administrar un servidor dedicado d
 ## Contenido
 - **`PZManager.exe`**: la app, con su propia ventana. No necesita permisos de administrador y no abre ningún puerto local.
 - **`instalar.bat`** (+ `instalar.ps1`): instala todo lo que la app necesita para funcionar.
-- `manager.py`: el código de la app, solo en la carpeta de desarrollo. También funciona desde la línea de comandos.
-- **79 entradas** de mods con Workshop ID numérico (`initial_mods.json`) y **20 entradas excluidas** sin Workshop ID (`mods_excluidos_sin_workshop_id.json`), que se pueden recuperar desde la pestaña Mods.
+- `manager.py`: el código de la app. También funciona desde la línea de comandos.
+- **79 entradas** de mods con Workshop ID numérico (`initial_mods.json`) y **20 entradas excluidas** sin Workshop ID (`mods_excluidos_sin_workshop_id.json`). Se pueden recuperar desde la pestaña Mods o buscando su Workshop ID con *Agregar desde Workshop*.
 - El programa no garantiza que los mods sean compatibles con B42 ni que funcionen en multijugador. La pestaña Mods verifica cada Workshop ID contra el `mod.info` descargado; después hay que probar el servidor.
 
 ## Instalación
@@ -56,8 +56,15 @@ Antes de cambiar de versión, respaldá `%USERPROFILE%\Zomboid`. No borres los s
 La rama predeterminada de Steam no garantiza Build 42. Comprobá la versión instalada; si necesitás una rama beta, configurala en **Configuración** y actualizá de nuevo.
 
 ## Pestañas de la app
-- **Inicio**: estado del servidor (en línea, iniciando, pide contraseña admin…), iniciar, *Detener y guardar*, guardar mundo, actualizar y forzar cierre. También la lista de preparación y si el INI coincide con los mods activos.
-- **Mods**: búsqueda, filtros (activos, inactivos, con avisos), activar o desactivar en bloque y orden de carga (arrastrando o con el número). Verifica cada Workshop ID contra los `mod.info` locales, incluida tu biblioteca de Steam. También importa y exporta, y recupera los mods excluidos. Los cambios quedan pendientes hasta *Guardar*; Ctrl+S guarda.
+- **Inicio**: estado del servidor (en línea, iniciando, pide contraseña admin…), iniciar, *Detener y guardar*, guardar mundo, actualizar y forzar cierre. También muestra:
+  - la lista de preparación y si el INI coincide con los mods activos;
+  - **Actualizaciones de Workshop**: qué mods tienen una versión nueva en Steam y cuáles fueron retirados (un mod retirado puede impedir que el servidor arranque);
+  - **Reiniciar para actualizar**: ahora o en 5, 10 o 15 minutos. La app avisa a los jugadores con `servermsg` y repite el aviso cuando falta poco. Después guarda, cierra y vuelve a iniciar el servidor, que descarga las actualizaciones al arrancar. Se puede cancelar durante la cuenta regresiva; *Detener* también la cancela.
+- **Mods**: búsqueda, filtros (activos, inactivos, con avisos), activar o desactivar en bloque y orden de carga (arrastrando o con el número). También importa y exporta, y recupera los mods excluidos. Los cambios quedan pendientes hasta *Guardar*; Ctrl+S guarda.
+  - *Agregar desde Workshop*: pegás la URL o el ID de uno o varios mods, o de una **colección**. La app muestra título, fecha de actualización, etiquetas (por ejemplo, Build 42) y el Mod ID que declara la descripción. Avisa si un mod fue retirado, es privado, es de otro juego o ya está en tu catálogo. Los que elegís se agregan activos al final del orden de carga.
+  - El Mod ID que sale de la descripción queda *sin confirmar* hasta que *Verificar archivos locales* lo encuentre en el `mod.info`, una vez que el servidor descargue el mod. Si la descripción no lo trae, lo escribís vos.
+  - *Buscar actualizaciones*: compara la fecha de cada mod en Steam con la de la copia que bajó el servidor.
+  - *Verificar archivos locales*: confirma cada Workshop ID contra los `mod.info` locales, incluida tu biblioteca de Steam, y avisa si un mod activo **requiere** otro que no está activo (`require=` del `mod.info`).
 - **Consola**: salida en vivo con filtro y colores, y envío de comandos (`save`, `players`, `servermsg`…). Las contraseñas que escribas ahí no se muestran.
 - **Jugadores**: conectados ahora (expulsar, banear, cambiar rol, agregar a la whitelist), cuentas guardadas en `Zomboid\db\<servidor>.db` (solo lectura, nunca muestra contraseñas) y acceso: solo whitelist (`Open=false`), contraseña del servidor y visibilidad pública. Las acciones se envían como comandos de consola, así que el servidor tiene que estar iniciado desde la app.
 - **Red y puertos**: puertos del INI y quién los usa, reglas del firewall de Windows, IP local, la redirección necesaria en el router, UPnP y una revisión de seguridad.
@@ -67,6 +74,11 @@ La rama predeterminada de Steam no garantiza Build 42. Comprobá la versión ins
 ## Seguridad y permisos
 - **Sin administrador**: la app funciona con un usuario estándar de Windows. Si la abrís como administrador, Inicio te avisa.
 - **Sin puertos locales**: la ventana se comunica con Python directamente (pywebview/WebView2), sin servidor HTTP. El motor WebView2 corre sin herramientas de desarrollo, sin menú contextual, sin almacenamiento persistente y con el tráfico de fondo reducido. Los enlaces externos se abren en tu navegador.
+- **Conexión con Steam**: solo cuando usás *Agregar desde Workshop* o *Buscar actualizaciones*. La app hace una consulta HTTPS saliente a la API pública de Steam (`api.steampowered.com`):
+  - sin cuenta ni clave, con el certificado verificado y sin seguir redirecciones;
+  - con una espera máxima de 15 s, respuestas de hasta 4 MB y colecciones de hasta 1000 mods.
+  
+  La ventana en sí no accede a Internet. Lo que devuelve Steam se muestra solo como texto y pasa por la misma validación que el catálogo.
 - **Firewall acotado**: *Red y puertos* crea una única regla de entrada **solo UDP**, solo para el `java.exe` del servidor y solo en el perfil de red actual. Podés elegir *solo red local* o *desde Internet*. Windows pide permiso de administrador (UAC) únicamente en ese paso. RCON nunca se abre. Si Windows ya había creado reglas amplias para `java.exe`, la app las detecta y ofrece deshabilitarlas.
 - **Exposición recomendada**: whitelist activada (o contraseña), UPnP desactivado con redirección manual en el router solo de los puertos UDP del juego, y RCON vacío.
 - **Una sola instancia**: no se pueden abrir dos ventanas que controlen el mismo servidor.
@@ -89,6 +101,8 @@ py -3 manager.py app|web|validate|detect|apply|start|update
 - La app no abre: aparece un aviso con el error. Si no aparece nada, ejecutá `instalar.bat -Verificar` para ver si falta WebView2 o .NET Framework.
 - `No existe configuración inicial`: iniciá el servidor una vez para crear el INI; después aplicá los mods.
 - `Falta el paquete pywebview`: ejecutá `crear_exe.bat`, o `py -3 -m pip install pywebview`.
-- Mods que no cargan: revisá en Mods el estado de verificación y las dependencias. Algunos mods son solo de cliente.
+- Mods que no cargan: revisá en Mods el estado de verificación y los avisos *Requiere…*. Algunos mods son solo de cliente.
+- `No se pudo conectar con Steam`: revisá la conexión a Internet o el firewall. El resto de la app funciona sin conexión.
+- *Buscar actualizaciones* dice que no hay fechas para comparar: el servidor todavía no descargó mods. Los baja al iniciar con los mods aplicados al INI.
 - El servidor quedó abierto fuera de la app (por ejemplo, tras un cierre inesperado): Inicio lo muestra como "fuera del panel" y solo permite forzar el cierre.
 # Pz-Admin-LocatedServer
