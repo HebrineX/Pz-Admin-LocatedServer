@@ -1,0 +1,476 @@
+[
+  {
+    "id": "ZombieBuddy",
+    "enabled": true,
+    "workshop_id": "3619862853",
+    "notes": "Requiere instalación adicional de componentes Java/nativos; Steam Workshop por sí solo no basta. Revisar instalación para servidor dedicado."
+  },
+  {
+    "id": "ProjectALifeNPCs",
+    "enabled": true,
+    "workshop_id": "3803984183",
+    "notes": ""
+  },
+  {
+    "id": "Viewpoint",
+    "enabled": true,
+    "workshop_id": "3809306528",
+    "notes": ""
+  },
+  {
+    "id": "ViewpointTrueBallistics",
+    "enabled": true,
+    "workshop_id": "3812864848",
+    "notes": ""
+  },
+  {
+    "id": "PZVoxelStudioViewpoint",
+    "enabled": true,
+    "workshop_id": "3810302175",
+    "notes": ""
+  },
+  {
+    "id": "isometricnomore",
+    "enabled": true,
+    "workshop_id": "3819166046",
+    "notes": ""
+  },
+  {
+    "id": "ImmersiveDriving",
+    "enabled": true,
+    "workshop_id": "3817413313",
+    "notes": ""
+  },
+  {
+    "id": "ProjectViewpointADS",
+    "enabled": true,
+    "workshop_id": "3812612054",
+    "notes": ""
+  },
+  {
+    "id": "aparosa_pz3dMinimap",
+    "enabled": true,
+    "workshop_id": "3810179295",
+    "notes": ""
+  },
+  {
+    "id": "ViewpointVisibleLoot",
+    "enabled": true,
+    "workshop_id": "3818189653",
+    "notes": ""
+  },
+  {
+    "id": "ViewpointBarricade",
+    "enabled": true,
+    "workshop_id": "3815033191",
+    "notes": ""
+  },
+  {
+    "id": "BadlandsGreenhouse",
+    "enabled": true,
+    "workshop_id": "3807333290",
+    "notes": ""
+  },
+  {
+    "id": "J93RunningBloodPools",
+    "enabled": true,
+    "workshop_id": "3784951301",
+    "notes": ""
+  },
+  {
+    "id": "Buttstroke",
+    "enabled": true,
+    "workshop_id": "3394044313",
+    "notes": ""
+  },
+  {
+    "id": "coldwinters",
+    "enabled": true,
+    "workshop_id": "3577100076",
+    "notes": ""
+  },
+  {
+    "id": "MiniHealthPlus",
+    "enabled": true,
+    "workshop_id": "3710913197",
+    "notes": ""
+  },
+  {
+    "id": "MinimalHotbar",
+    "enabled": true,
+    "workshop_id": "3688576740",
+    "notes": ""
+  },
+  {
+    "id": "EFTBP",
+    "enabled": true,
+    "workshop_id": "3432928943",
+    "notes": ""
+  },
+  {
+    "id": "NutritionMakesSense",
+    "enabled": true,
+    "workshop_id": "3690404044",
+    "notes": ""
+  },
+  {
+    "id": "ViewpointDoor",
+    "enabled": true,
+    "workshop_id": "3812151347",
+    "notes": ""
+  },
+  {
+    "id": "ViewpointTrueWeathers",
+    "enabled": true,
+    "workshop_id": "3813908957",
+    "notes": ""
+  },
+  {
+    "id": "ViewpointTrueWeathersGameplay",
+    "enabled": true,
+    "workshop_id": "3813908957",
+    "notes": ""
+  },
+  {
+    "id": "RoosterCrow",
+    "enabled": true,
+    "workshop_id": "3808848579",
+    "notes": ""
+  },
+  {
+    "id": "RunAndGun",
+    "enabled": true,
+    "workshop_id": "3806519568",
+    "notes": ""
+  },
+  {
+    "id": "SapphCooking_B42",
+    "enabled": true,
+    "workshop_id": "3409143790",
+    "notes": ""
+  },
+  {
+    "id": "SkullysFasterZombies",
+    "enabled": true,
+    "workshop_id": "3702705968",
+    "notes": ""
+  },
+  {
+    "id": "SkullysSlowerPlayer",
+    "enabled": true,
+    "workshop_id": "3702705968",
+    "notes": ""
+  },
+  {
+    "id": "SkullysZombieCollision",
+    "enabled": true,
+    "workshop_id": "3778511497",
+    "notes": ""
+  },
+  {
+    "id": "ViewpointSurface",
+    "enabled": true,
+    "workshop_id": "3814398576",
+    "notes": ""
+  },
+  {
+    "id": "SPNCC",
+    "enabled": true,
+    "workshop_id": "3414634809",
+    "notes": ""
+  },
+  {
+    "id": "SPNCCDetails",
+    "enabled": true,
+    "workshop_id": "3414634809",
+    "notes": ""
+  },
+  {
+    "id": "SPNCCDetailsHD",
+    "enabled": true,
+    "workshop_id": "3414634809",
+    "notes": ""
+  },
+  {
+    "id": "SPNCCFaces",
+    "enabled": true,
+    "workshop_id": "3414634809",
+    "notes": ""
+  },
+  {
+    "id": "TotalWeightRebalance",
+    "enabled": true,
+    "workshop_id": "3786993262",
+    "notes": ""
+  },
+  {
+    "id": "vac_mod_b42_utils",
+    "enabled": true,
+    "workshop_id": "3557515648",
+    "notes": ""
+  },
+  {
+    "id": "vac_hydration_backpack",
+    "enabled": true,
+    "workshop_id": "3712569610",
+    "notes": ""
+  },
+  {
+    "id": "vac_playing_utils",
+    "enabled": true,
+    "workshop_id": "3557515648",
+    "notes": ""
+  },
+  {
+    "id": "VanillaOutfitsExpanded",
+    "enabled": true,
+    "workshop_id": "3783094058",
+    "notes": ""
+  },
+  {
+    "id": "VanillaVehiclesAnimated",
+    "enabled": true,
+    "workshop_id": "3281755175",
+    "notes": ""
+  },
+  {
+    "id": "VVA_cullseats",
+    "enabled": true,
+    "workshop_id": "3281755175",
+    "notes": ""
+  },
+  {
+    "id": "VVA_PikamyDelight",
+    "enabled": true,
+    "workshop_id": "3281755175",
+    "notes": ""
+  },
+  {
+    "id": "VVA_snapDoors",
+    "enabled": true,
+    "workshop_id": "3281755175",
+    "notes": ""
+  },
+  {
+    "id": "VVA_transparentWindows",
+    "enabled": true,
+    "workshop_id": "3281755175",
+    "notes": ""
+  },
+  {
+    "id": "ViewpointAdvancedThrowables",
+    "enabled": true,
+    "workshop_id": "3813194971",
+    "notes": ""
+  },
+  {
+    "id": "ViewpointCropVisibility",
+    "enabled": true,
+    "workshop_id": "3812659173",
+    "notes": ""
+  },
+  {
+    "id": "ViewpointFences",
+    "enabled": true,
+    "workshop_id": "3813723091",
+    "notes": ""
+  },
+  {
+    "id": "ViewpointTileFix",
+    "enabled": true,
+    "workshop_id": "3814178814",
+    "notes": ""
+  },
+  {
+    "id": "BION_WarmUp",
+    "enabled": true,
+    "workshop_id": "3770091088",
+    "notes": ""
+  },
+  {
+    "id": "HBVCEFb42",
+    "enabled": true,
+    "workshop_id": "3610677934",
+    "notes": ""
+  },
+  {
+    "id": "GunsOfMarz",
+    "enabled": true,
+    "workshop_id": "3722134990",
+    "notes": ""
+  },
+  {
+    "id": "MinimalSidebar",
+    "enabled": true,
+    "workshop_id": "3642084851",
+    "notes": ""
+  },
+  {
+    "id": "ToughnessSkill",
+    "enabled": true,
+    "workshop_id": "3545533939",
+    "notes": ""
+  },
+  {
+    "id": "Antique Swords",
+    "enabled": true,
+    "workshop_id": "3717809483",
+    "notes": ""
+  },
+  {
+    "id": "DynamicGearRattling",
+    "enabled": true,
+    "workshop_id": "3808152720",
+    "notes": ""
+  },
+  {
+    "id": "AccCamos",
+    "enabled": true,
+    "workshop_id": "3454414190",
+    "notes": ""
+  },
+  {
+    "id": "AccCamosPeriodPack",
+    "enabled": true,
+    "workshop_id": "3454414190",
+    "notes": ""
+  },
+  {
+    "id": "GrassierGrassViewpoint",
+    "enabled": true,
+    "workshop_id": "3818853354",
+    "notes": ""
+  },
+  {
+    "id": "PZAttachTwoWeaponsOnBack",
+    "enabled": true,
+    "workshop_id": "3819163031",
+    "notes": ""
+  },
+  {
+    "id": "ViewpointPhysicsProps",
+    "enabled": true,
+    "workshop_id": "3817135911",
+    "notes": ""
+  },
+  {
+    "id": "ViewpointFPS",
+    "enabled": true,
+    "workshop_id": "3820156996",
+    "notes": ""
+  },
+  {
+    "id": "ViewpointGpuMemoryFix",
+    "enabled": true,
+    "workshop_id": "3828842183",
+    "notes": "Verificar: la colección enlaza Viewpoint GPU Fix (versión nueva); confirmar que el Mod ID siga siendo ViewpointGpuMemoryFix."
+  },
+  {
+    "id": "ViewpointFPSPlus",
+    "enabled": true,
+    "workshop_id": "3814046234",
+    "notes": ""
+  },
+  {
+    "id": "ProjectViewpointQOL",
+    "enabled": true,
+    "workshop_id": "3811256204",
+    "notes": ""
+  },
+  {
+    "id": "FishingView",
+    "enabled": true,
+    "workshop_id": "3814560827",
+    "notes": "El autor indica que no ha probado multijugador."
+  },
+  {
+    "id": "ViewpointBunkerFix",
+    "enabled": true,
+    "workshop_id": "3815531837",
+    "notes": ""
+  },
+  {
+    "id": "ViewpointFences3D",
+    "enabled": true,
+    "workshop_id": "3814486926",
+    "notes": ""
+  },
+  {
+    "id": "ViewPointTreePack",
+    "enabled": true,
+    "workshop_id": "3824281294",
+    "notes": ""
+  },
+  {
+    "id": "ViewpointImmersiveEffects",
+    "enabled": true,
+    "workshop_id": "3812984535",
+    "notes": ""
+  },
+  {
+    "id": "VPCleanUI",
+    "enabled": true,
+    "workshop_id": "3823537384",
+    "notes": ""
+  },
+  {
+    "id": "VPCleanUIFont",
+    "enabled": true,
+    "workshop_id": "3823537384",
+    "notes": ""
+  },
+  {
+    "id": "VPCleanUILoot",
+    "enabled": true,
+    "workshop_id": "3823537384",
+    "notes": ""
+  },
+  {
+    "id": "IEUI",
+    "enabled": true,
+    "workshop_id": "3818237096",
+    "notes": ""
+  },
+  {
+    "id": "IEUIParchment",
+    "enabled": true,
+    "workshop_id": "3818237096",
+    "notes": ""
+  },
+  {
+    "id": "UCMV_UltimateContextMenuViewpoint",
+    "enabled": true,
+    "workshop_id": "3816749403",
+    "notes": ""
+  },
+  {
+    "id": "ViewpointRadialCursor",
+    "enabled": true,
+    "workshop_id": "3821900767",
+    "notes": ""
+  },
+  {
+    "id": "ViewpointUI",
+    "enabled": true,
+    "workshop_id": "3812616893",
+    "notes": ""
+  },
+  {
+    "id": "ProjectViewpointQOLAdditionalFeatures",
+    "enabled": true,
+    "workshop_id": "3811256204",
+    "notes": ""
+  },
+  {
+    "id": "ProjectViewpointQOLControllerSupport",
+    "enabled": true,
+    "workshop_id": "3811256204",
+    "notes": ""
+  },
+  {
+    "id": "ViewpointExtendedSupport",
+    "enabled": true,
+    "workshop_id": "3812978679",
+    "notes": ""
+  }
+]

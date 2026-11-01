@@ -1,0 +1,122 @@
+[
+  {
+    "id": "ProjectViewpointNearVegetation",
+    "enabled": true,
+    "workshop_id": "",
+    "notes": ""
+  },
+  {
+    "id": "Explosives",
+    "enabled": true,
+    "workshop_id": "",
+    "notes": "Workshop candidato en la colección: 3745718141. Pendiente de verificar Mod ID exacto; no se asignó automáticamente."
+  },
+  {
+    "id": "SWMG",
+    "enabled": true,
+    "workshop_id": "",
+    "notes": "Workshop candidato en la colección: 3722064198. Pendiente de verificar Mod ID exacto; no se asignó automáticamente."
+  },
+  {
+    "id": "HBAmmoCraft",
+    "enabled": true,
+    "workshop_id": "",
+    "notes": ""
+  },
+  {
+    "id": "HBTacReload",
+    "enabled": true,
+    "workshop_id": "",
+    "notes": ""
+  },
+  {
+    "id": "Viewpoint2Dto3D",
+    "enabled": true,
+    "workshop_id": "",
+    "notes": "Workshop candidato en la colección: 3812510377. Pendiente de verificar Mod ID exacto; no se asignó automáticamente."
+  },
+  {
+    "id": "Viewpoint2Dto3D_ExtendedPatch",
+    "enabled": true,
+    "workshop_id": "",
+    "notes": "Workshop candidato en la colección: 3812510377. Pendiente de verificar Mod ID exacto; no se asignó automáticamente."
+  },
+  {
+    "id": "ViewpointAimSpread",
+    "enabled": true,
+    "workshop_id": "",
+    "notes": ""
+  },
+  {
+    "id": "ViewpointCrosshairUse",
+    "enabled": true,
+    "workshop_id": "",
+    "notes": ""
+  },
+  {
+    "id": "ViewpointMouseRightClick",
+    "enabled": true,
+    "workshop_id": "",
+    "notes": ""
+  },
+  {
+    "id": "ViewpointEffects3D",
+    "enabled": true,
+    "workshop_id": "",
+    "notes": ""
+  },
+  {
+    "id": "ViewpointHideCamera",
+    "enabled": true,
+    "workshop_id": "",
+    "notes": ""
+  },
+  {
+    "id": "ViewpointOpenContainers",
+    "enabled": true,
+    "workshop_id": "",
+    "notes": ""
+  },
+  {
+    "id": "ViewpointPlaceItems",
+    "enabled": true,
+    "workshop_id": "",
+    "notes": ""
+  },
+  {
+    "id": "ViewpointProneKey",
+    "enabled": true,
+    "workshop_id": "",
+    "notes": ""
+  },
+  {
+    "id": "ViewpointReticle",
+    "enabled": true,
+    "workshop_id": "",
+    "notes": ""
+  },
+  {
+    "id": "ViewpointZoomHold",
+    "enabled": true,
+    "workshop_id": "",
+    "notes": ""
+  },
+  {
+    "id": "ViewpointVisualFixes",
+    "enabled": true,
+    "workshop_id": "",
+    "notes": "Workshop candidato en la colección: 3821308495. Pendiente de verificar Mod ID exacto; no se asignó automáticamente."
+  },
+  {
+    "id": "BasileDoors3D",
+    "enabled": true,
+    "workshop_id": "",
+    "notes": "Workshop candidato en la colección: 3818859807. Pendiente de verificar Mod ID exacto; no se asignó automáticamente."
+  },
+  {
+    "id": "DGVViewpointQoL",
+    "enabled": true,
+    "workshop_id": "",
+    "notes": "Workshop candidato en la colección: 3819316734. Pendiente de verificar Mod ID exacto; no se asignó automáticamente."
+  }
+]
