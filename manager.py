@@ -3,6 +3,7 @@
 import argparse
 import base64
 import ctypes
+import hashlib
 import http.client
 import json
 import os
@@ -13,6 +14,7 @@ import shutil
 import socket
 import sqlite3
 import ssl
+import stat
 import subprocess
 import sys
 import threading
@@ -24,6 +26,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, urlencode
 
+VERSION = '3.1.0'
 # Compilado con PyInstaller, los datos viven junto a PZManager.exe y no en la carpeta temporal del ejecutable.
 FROZEN = getattr(sys, 'frozen', False)
 ROOT = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
@@ -32,6 +35,7 @@ CATALOG = DATA / 'mods.json'
 SETTINGS = DATA / 'settings.json'
 EXCLUDED = ROOT / 'mods_excluidos_sin_workshop_id.json'
 LOGS = ROOT / 'logs'
+BACKUPS = ROOT / 'backups'
 LOCK = threading.RLock()
 INSPECT_LOCK = threading.Lock()
 PROCESS = None
@@ -53,6 +57,13 @@ STEAM_MAX_ITEMS = 1000
 WS_CHECK = {}
 RESTART = {'active': False, 'phase': '', 'at': 0, 'error': '', 'cancel': None}
 RESTART_NOTICES = (15, 10, 5, 2, 1, 0)
+# Actualizaciones de la app: version.json de la rama master en GitHub, con la SHA-256 de cada archivo.
+# Solo el exe: git cambia los saltos de línea de los archivos de texto y su SHA-256 no coincidiría.
+UPDATE_URL = 'https://raw.githubusercontent.com/HebrineX/Pz-Admin-LocatedServer/master/'
+UPDATE_FILES = ('PZManager.exe',)
+UPDATE_MAX_BYTES = 200 * 1024 * 1024
+UPDATE_EVERY = 12 * 3600
+UPDATE = {'checked': 0.0, 'latest': '', 'error': '', 'result': ''}
 
 class NotFound(Exception):
     """Ruta de la API inexistente."""
@@ -69,6 +80,7 @@ DEFAULT = {
  'server_appid': '380870',
  'extra_server_args': '',
  'ram_gb': 0,
+ 'auto_update_check': True,
 }
 
 def ensure():
@@ -247,20 +259,25 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):
         return None
 
+def https_read(req, limit, timeout, what):
+    """Pedido HTTPS con TLS verificado, sin seguir redirecciones y con tamaño máximo; devuelve los bytes."""
+    opener = urllib.request.build_opener(NoRedirect, urllib.request.HTTPSHandler(context=ssl.create_default_context()))
+    try:
+        with opener.open(req, timeout=timeout) as r:
+            raw = r.read(limit + 1)
+    except urllib.error.HTTPError as e:
+        raise ValueError(f'{what} respondió con el error {e.code}. Probá de nuevo en unos minutos.')
+    except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
+        raise ValueError(f'No se pudo conectar con {what}: {getattr(e, "reason", e)}')
+    if len(raw) > limit:
+        raise ValueError(f'La respuesta de {what} es demasiado grande.')
+    return raw
+
 def steam_post(method, params):
     """Consultar la API pública de Steam Workshop (sin clave), con TLS verificado y límites de tiempo y tamaño."""
-    opener = urllib.request.build_opener(NoRedirect, urllib.request.HTTPSHandler(context=ssl.create_default_context()))
     req = urllib.request.Request(STEAM_API + method + '/v1/', data=urlencode(params).encode(),
                                  headers={'User-Agent':'PZDedicatedManager'})
-    try:
-        with opener.open(req, timeout=15) as r:
-            raw = r.read(STEAM_MAX_BYTES + 1)
-    except urllib.error.HTTPError as e:
-        raise ValueError(f'Steam respondió con el error {e.code}. Probá de nuevo en unos minutos.')
-    except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
-        raise ValueError(f'No se pudo conectar con Steam: {getattr(e, "reason", e)}')
-    if len(raw) > STEAM_MAX_BYTES:
-        raise ValueError('La respuesta de Steam es demasiado grande.')
+    raw = https_read(req, STEAM_MAX_BYTES, 15, 'Steam')
     try:
         data = json.loads(raw)['response']
     except (ValueError, KeyError, TypeError):
@@ -376,25 +393,229 @@ def workshop_lookup(data):
                            for wid, count in collections.items()],
             'truncated':truncated}
 
-def server_workshop_manifest(s):
-    """Fecha de cada mod que bajó el servidor, leída de su appworkshop_<appid>.acf (None si todavía no bajó ninguno)."""
-    appid = to_int(s.get('steam_workshop_appid')) or 108600
-    acf = Path(s['server_dir']) / 'steamapps' / 'workshop' / f'appworkshop_{appid}.acf'
-    try:
-        text = acf.read_text(encoding='utf-8', errors='replace')
-    except OSError:
-        return None
-    marker = text.find('"WorkshopItemsInstalled"')
+def workshop_root(s):
+    """Carpeta steamapps/workshop del servidor dedicado y el AppID de Workshop de PZ."""
+    return Path(s['server_dir']) / 'steamapps' / 'workshop', str(to_int(s.get('steam_workshop_appid')) or 108600)
+
+def workshop_acf(s):
+    """appworkshop_<appid>.acf: el registro de Steam de los mods que bajó el servidor."""
+    root, appid = workshop_root(s)
+    return root / f'appworkshop_{appid}.acf'
+
+def acf_block(text, name):
+    """Posiciones de inicio y fin del bloque { } de una sección del .acf, o None si no está completa."""
+    marker = text.find(f'"{name}"')
     start = text.find('{', marker) if marker >= 0 else -1
     if start < 0:
-        return {}
+        return None
     depth = 0
     for end in range(start, len(text)):
         depth += {'{':1, '}':-1}.get(text[end], 0)
         if depth == 0:
-            break
-    block = text[start:end + 1]
-    return {wid: to_int(t) for wid, t in re.findall(r'"(\d+)"\s*\{[^{}]*?"timeupdated"\s*"(\d+)"', block)}
+            return start, end
+    return None
+
+def acf_installed(text, field):
+    """Valor numérico de un campo (timeupdated, size) de cada mod en WorkshopItemsInstalled."""
+    span = acf_block(text, 'WorkshopItemsInstalled')
+    block = text[span[0]:span[1] + 1] if span else ''
+    return {wid: to_int(v) for wid, v in re.findall(r'"(\d+)"\s*\{[^{}]*?"' + field + r'"\s*"(\d+)"', block)}
+
+def server_workshop_manifest(s):
+    """Fecha de cada mod que bajó el servidor, leída de su appworkshop_<appid>.acf (None si todavía no bajó ninguno)."""
+    try:
+        text = workshop_acf(s).read_text(encoding='utf-8', errors='replace')
+    except OSError:
+        return None
+    return acf_installed(text, 'timeupdated')
+
+def acf_remove(acf, ids):
+    """Quitar mods del .acf (con copia .bak) para que Steam no los dé por instalados; devuelve la copia o None."""
+    if not ids or not acf.is_file():
+        return None
+    text = acf.read_bytes().decode('utf-8')
+    removed = sum(acf_installed(text, 'size').get(w, 0) for w in ids)
+    for name in ('WorkshopItemsInstalled', 'WorkshopItemDetails'):
+        span = acf_block(text, name)
+        if not span:
+            continue
+        block = text[span[0]:span[1] + 1]
+        new = re.sub(r'[ \t]*"(\d+)"\s*\{[^{}]*\}[ \t]*(\r?\n)?', lambda m: '' if m.group(1) in ids else m.group(0), block)
+        text = text[:span[0]] + new + text[span[1] + 1:]
+    text = re.sub(r'("SizeOnDisk"\s*")(\d+)(")', lambda m: m.group(1) + str(max(0, int(m.group(2)) - removed)) + m.group(3), text, count=1)
+    backup = acf.with_name(acf.name + '.' + datetime.now().strftime('%Y%m%d-%H%M%S-%f') + '.bak')
+    shutil.copy2(acf, backup)
+    tmp = acf.with_name(acf.name + '.tmp')
+    tmp.write_bytes(text.encode('utf-8'))
+    tmp.replace(acf)
+    return backup
+
+def inside(path, parent):
+    """True si path (ya resuelto, siguiendo enlaces) queda dentro de parent o es parent."""
+    try:
+        Path(path).resolve().relative_to(Path(parent).resolve())
+        return True
+    except (ValueError, OSError):
+        return False
+
+def is_link(path):
+    """Enlace simbólico o junction: nunca se borra a través de uno."""
+    isjunction = getattr(os.path, 'isjunction', lambda p: False)
+    return os.path.islink(path) or isjunction(path)
+
+def long_path(path):
+    """Ruta con prefijo \\\\?\\ en Windows: los mods tienen carpetas que superan los 260 caracteres."""
+    path = str(Path(path).resolve())
+    return '\\\\?\\' + path if os.name == 'nt' and not path.startswith('\\\\') else path
+
+def remove_tree(path):
+    """Borrar una carpeta completa, incluidos los archivos de solo lectura que deja Steam."""
+    def retry(func, p, _):
+        os.chmod(p, stat.S_IWRITE)
+        func(p)
+    if is_link(path):
+        raise ValueError(f'{path} es un enlace: no se borra.')
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(long_path(path), onexc=retry)
+    else:
+        shutil.rmtree(long_path(path), onerror=retry)
+
+def remove_path(path):
+    """Borrar un archivo o una carpeta; de un enlace se borra solo el enlace, nunca su destino."""
+    if is_link(path):
+        (os.rmdir if os.path.isdir(path) else os.unlink)(path)
+    elif path.is_dir():
+        remove_tree(path)
+    else:
+        target = long_path(path)
+        os.chmod(target, stat.S_IWRITE)
+        os.remove(target)
+
+def dir_size(path):
+    """Tamaño total en bytes de una carpeta (sin seguir enlaces)."""
+    total = 0
+    for base, dirs, files in os.walk(long_path(path)):
+        for f in files:
+            try:
+                total += os.lstat(os.path.join(base, f)).st_size
+            except OSError:
+                pass
+    return total
+
+def require_stopped(what):
+    """Las acciones que borran datos piden el servidor y SteamCMD detenidos."""
+    if (PROCESS and PROCESS.poll() is None) or external_server(fresh=True):
+        raise ValueError(f'Detené el servidor antes de {what}.')
+
+def ini_workshop_ids():
+    """Workshop IDs que el INI le pide descargar al servidor."""
+    return [x.strip() for x in ini_values().get('WorkshopItems', '').split(';') if x.strip()]
+
+def workshop_downloads():
+    """Mods que bajó el servidor, con su tamaño y si el INI o el catálogo todavía los usan."""
+    s = settings()
+    root, appid = workshop_root(s)
+    folder = root / 'content' / appid
+    result = {'folder':str(folder),'running':bool(PROCESS and PROCESS.poll() is None),'items':[],'unused':[],'unused_size':0}
+    if not folder.is_dir():
+        return result
+    try:
+        sizes = acf_installed(workshop_acf(s).read_text(encoding='utf-8', errors='replace'), 'size')
+    except OSError:
+        sizes = {}
+    used = set(ini_workshop_ids())
+    catalog = {}
+    for m in mods():
+        wid = str(m.get('workshop_id', ''))
+        if wid.isdigit():
+            entry = catalog.setdefault(wid, {'mods':[], 'enabled':False})
+            entry['mods'].append(str(m.get('id', '')))
+            entry['enabled'] = entry['enabled'] or bool(m.get('enabled'))
+    for path in sorted(folder.iterdir(), key=lambda p: p.name):
+        if not path.is_dir() or not path.name.isdigit():
+            continue
+        wid = path.name
+        entry = catalog.get(wid)
+        state = 'used' if wid in used or (entry and entry['enabled']) else 'inactive' if entry else 'removed'
+        size = sizes.get(wid) or dir_size(path)
+        result['items'].append({'workshop_id':wid,'size':size,'state':state,'mods':entry['mods'] if entry else [],
+                                'title':(WS_CHECK.get('items') or {}).get(wid, {}).get('title', '')})
+        if state != 'used':
+            result['unused'].append(wid)
+            result['unused_size'] += size
+    return result
+
+def purge_workshop(data):
+    """Borrar del servidor los mods descargados que ya no se usan: su carpeta y su entrada en el .acf."""
+    ids = data.get('ids')
+    if not isinstance(ids, list) or not ids or len(ids) > 5000 or not all(isinstance(x, str) and x.isdigit() for x in ids):
+        raise ValueError('Elegí los mods a borrar.')
+    require_stopped('borrar mods descargados')
+    s = settings()
+    info = workshop_downloads()
+    unused = set(info['unused'])
+    busy = [w for w in ids if w not in unused]
+    if busy:
+        raise ValueError('Estos mods siguen en uso o no están descargados: ' + ', '.join(busy[:10]))
+    root, appid = workshop_root(s)
+    folder = root / 'content' / appid
+    sizes = {x['workshop_id']: x['size'] for x in info['items']}
+    removed, errors, freed = [], [], 0
+    for wid in dict.fromkeys(ids):
+        path = folder / wid
+        if is_link(path) or not inside(path, folder):
+            errors.append(f'{wid}: la carpeta apunta fuera de {folder}.')
+            continue
+        try:
+            remove_tree(path)
+            partial = root / 'downloads' / appid / wid
+            if partial.is_dir():
+                remove_tree(partial)
+        except (OSError, ValueError) as e:
+            errors.append(f'{wid}: {e}')
+            continue
+        removed.append(wid)
+        freed += sizes.get(wid, 0)
+    backup = acf_remove(workshop_acf(s), set(removed))
+    return {'removed':removed,'freed':freed,'errors':errors,'acf_backup':str(backup) if backup else None}
+
+def check_server_dir(s):
+    """Validar que la carpeta del servidor se pueda vaciar sin llevarse la app, Zomboid ni SteamCMD."""
+    server = Path(s['server_dir']).resolve()
+    appid = str(to_int(s.get('server_appid')) or 380870)
+    if not server.is_dir():
+        raise ValueError(f'No existe la carpeta del servidor: {server}')
+    if not ((server / 'StartServer64.bat').is_file() or (server / 'steamapps' / f'appmanifest_{appid}.acf').is_file()):
+        raise ValueError(f'{server} no parece la carpeta de un servidor de Project Zomboid: no se borra nada.')
+    protected = [ROOT, Path.home(), Path(s['pz_home']), Path(s['steamcmd_path']).parent]
+    if server.parent == server or is_link(server) or any(inside(p, server) for p in protected):
+        raise ValueError(f'{server} contiene la app, Zomboid, SteamCMD o tu carpeta de usuario: no se borra nada.')
+    return server
+
+def reinstall_server(data):
+    """Reinstalar el servidor desde cero: borrar sus archivos y volver a bajarlo con SteamCMD."""
+    require_stopped('reinstalar el servidor')
+    s = settings()
+    if not Path(s['steamcmd_path']).is_file():
+        raise ValueError('No existe steamcmd.exe en la ruta configurada: no se borra nada.')
+    server = check_server_dir(s)
+    keep_mods = bool(data.get('keep_mods', True))
+    errors = []
+    for child in list(server.iterdir()):
+        try:
+            if keep_mods and child.name.lower() == 'steamapps' and child.is_dir() and not is_link(child):
+                for sub in list(child.iterdir()):
+                    if sub.name.lower() != 'workshop':
+                        remove_path(sub)
+            else:
+                remove_path(child)
+        except (OSError, ValueError) as e:
+            errors.append(f'{child.name}: {e}')
+    if errors:
+        raise ValueError('No se pudo borrar todo (' + '; '.join(errors[:3]) + '). Cerrá los programas que usen la carpeta y probá de nuevo, o usá Actualizar servidor.')
+    result = launch('update')
+    result['kept_mods'] = keep_mods
+    return result
 
 def workshop_updates(data=None):
     """Comparar la fecha de cada mod del catálogo guardado en Steam con la de la copia que bajó el servidor."""
@@ -701,7 +922,7 @@ def status():
             'ready':PROC_INFO.get('ready',False),'prompt':running and PROC_INFO.get('prompt',False),
             'stopping':running and PROC_INFO.get('stopping',False),'update_ok':PROC_INFO.get('update_ok',False),
             'can_command':running and PROC_INFO.get('kind')=='server' and PROC_INFO.get('stdin',False),
-            'external':None if running else external_server(),'restart':restart_status()}
+            'external':None if running else external_server(),'restart':restart_status(),'app':app_status()}
 
 def overview():
     """Resumen para la pantalla de inicio: estado, pasos de preparación y sincronización de mods."""
@@ -756,10 +977,12 @@ def read_log(name, offset=None):
 def open_folder(target):
     """Abrir en el Explorador una de las carpetas conocidas del servidor."""
     s = settings()
-    folders = {'server':Path(s['server_dir']),'zomboid':Path(s['pz_home']),'ini':Path(s['pz_home'])/'Server','logs':LOGS,'root':ROOT}
+    folders = {'server':Path(s['server_dir']),'zomboid':Path(s['pz_home']),'ini':Path(s['pz_home'])/'Server','logs':LOGS,'root':ROOT,'backups':BACKUPS}
     if target not in folders:
         raise ValueError('Carpeta desconocida.')
     path = folders[target]
+    if target == 'backups':
+        path.mkdir(exist_ok=True)
     if not path.is_dir():
         raise ValueError(f'No existe la carpeta {path}')
     if os.name != 'nt':
@@ -884,6 +1107,104 @@ def whitelist():
         con.close()
     result['users'].sort(key=lambda u: (u['username'] or '').lower())
     return result
+
+def world_dir(s):
+    """Carpeta del mundo guardado del servidor (Saves/Multiplayer/<nombre>)."""
+    return Path(s['pz_home']) / 'Saves' / 'Multiplayer' / safe_name(s['server_name'])
+
+def characters():
+    """Personajes guardados en players.db del mundo, en solo lectura."""
+    db = world_dir(settings()) / 'players.db'
+    result = {'db':str(db),'exists':db.is_file(),'characters':[]}
+    if not db.is_file():
+        return result
+    try:
+        con = sqlite3.connect(db.as_uri() + '?mode=ro', uri=True, timeout=3)
+    except sqlite3.Error as e:
+        raise ValueError(f'No se pudo abrir {db.name}: {e}')
+    try:
+        cols = {r[1] for r in con.execute('pragma table_info(networkPlayers)')}
+        if not cols:
+            return result
+        if not {'id', 'username'} <= cols:
+            raise ValueError('players.db tiene un formato que la app no conoce.')
+        pick = [c for c in ('id', 'username', 'name', 'steamid', 'isDead', 'x', 'y') if c in cols]
+        for row in con.execute('select ' + ','.join(pick) + ' from networkPlayers'):
+            r = dict(zip(pick, row))
+            # El SteamID se envía como texto: como número, JavaScript lo redondea.
+            result['characters'].append({'id':r['id'],'username':str(r.get('username') or ''),'name':str(r.get('name') or ''),
+                                         'steamid':str(r['steamid']) if r.get('steamid') else None,'dead':bool(r.get('isDead')),
+                                         'pos':f"{int(r['x'])}, {int(r['y'])}" if isinstance(r.get('x'), (int, float)) and isinstance(r.get('y'), (int, float)) else ''})
+    except sqlite3.Error as e:
+        raise ValueError(f'No se pudo leer {db.name}: {e}')
+    finally:
+        con.close()
+    result['characters'].sort(key=lambda c: (c['username'].lower(), c['id']))
+    return result
+
+def delete_characters(data):
+    """Borrar personajes de players.db (con copia previa): el jugador crea uno nuevo al volver a entrar."""
+    ids = data.get('ids')
+    if not isinstance(ids, list) or not ids or len(ids) > 1000 or not all(type(x) is int and x >= 0 for x in ids):
+        raise ValueError('Elegí los personajes a borrar.')
+    require_stopped('borrar personajes')
+    s = settings()
+    db = world_dir(s) / 'players.db'
+    if not db.is_file():
+        raise ValueError('Todavía no hay personajes guardados.')
+    backup = BACKUPS / 'personajes' / f"{safe_name(s['server_name'])}-players-{datetime.now():%Y%m%d-%H%M%S-%f}.db"
+    backup.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        src = sqlite3.connect(db.as_uri() + '?mode=ro', uri=True, timeout=5)
+        dst = sqlite3.connect(backup)
+        try:
+            src.backup(dst)
+        finally:
+            src.close()
+            dst.close()
+        con = sqlite3.connect(db, timeout=5)
+        try:
+            with con:
+                deleted = con.execute('delete from networkPlayers where id in (' + ','.join('?' * len(ids)) + ')', ids).rowcount
+        finally:
+            con.close()
+    except sqlite3.Error as e:
+        raise ValueError(f'No se pudo modificar {db.name}: {e}')
+    return {'deleted':deleted,'backup':str(backup)}
+
+def delete_world(data):
+    """Borrar el mundo para que el servidor genere uno nuevo; conserva el INI, el sandbox, las cuentas y los baneos."""
+    s = settings()
+    name = safe_name(s['server_name'])
+    if str(data.get('confirm', '')).strip() != name:
+        raise ValueError(f'Escribí el nombre del servidor ({name}) para confirmar.')
+    require_stopped('borrar el mundo')
+    saves = Path(s['pz_home']) / 'Saves' / 'Multiplayer'
+    targets = [p for p in (saves / name, saves / (name + '_player')) if p.is_dir()]
+    if not targets:
+        raise ValueError(f'No hay un mundo guardado de {name} en {saves}.')
+    for p in targets:
+        if is_link(p) or not inside(p, saves) or inside(ROOT, p):
+            raise ValueError(f'{p} apunta fuera de la carpeta de partidas: no se borra nada.')
+    copy = None
+    if data.get('backup', True):
+        copy = BACKUPS / 'mundos' / f'{name}-{datetime.now():%Y%m%d-%H%M%S}'
+        copy.mkdir(parents=True)
+        for p in targets:
+            shutil.move(str(p), str(copy / p.name))
+    else:
+        for p in targets:
+            remove_tree(p)
+    reset = None
+    ini = ini_path(s)
+    if ini.is_file():
+        # Cada jugador guarda una copia del mundo junto al ResetID: uno nuevo hace que la descarten.
+        old = ini_values().get('ResetID', '').strip()
+        reset = old
+        while reset == old:
+            reset = str(secrets.randbelow(1_000_000_000))
+        write_ini_keys(ini, {'ResetID': reset}, append_missing=True)
+    return {'removed':[p.name for p in targets],'backup':str(copy) if copy else None,'reset_id':reset}
 
 def server_ports(values):
     """Puertos que usa el servidor según el INI (RCON solo cuenta si tiene contraseña)."""
@@ -1067,6 +1388,7 @@ def save_settings(data):
     safe_name(s['server_name'])
     if s['branch'] and not re.fullmatch(r'[A-Za-z0-9_-]{1,50}',s['branch']): raise ValueError('Rama inválida')
     s['strict']=bool(data.get('strict',True))
+    s['auto_update_check']=bool(data.get('auto_update_check',s.get('auto_update_check',True)))
     try: ram=int(data.get('ram_gb',s.get('ram_gb',0)) or 0)
     except (TypeError,ValueError): raise ValueError('RAM inválida')
     if not 0<=ram<=256: raise ValueError('RAM inválida (0 a 256 GB).')
@@ -1156,6 +1478,165 @@ def restart_cancel(data):
         pass
     return {'cancelled':True}
 
+def version_tuple(text):
+    """'3.1.0' -> (3, 1, 0); ValueError si no tiene ese formato."""
+    if not re.fullmatch(r'\d{1,4}\.\d{1,4}\.\d{1,4}', str(text)):
+        raise ValueError(f'Versión inválida: {text!r}')
+    return tuple(int(x) for x in str(text).split('.'))
+
+def sha256_file(path):
+    """SHA-256 de un archivo, en hexadecimal."""
+    digest = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1 << 20), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+def release_manifest():
+    """Escribir version.json con la versión y la SHA-256 de cada archivo que descarga la actualización."""
+    files = {}
+    for name in UPDATE_FILES:
+        path = ROOT / name
+        if not path.is_file():
+            raise ValueError(f'Falta {name}: compilalo antes de generar version.json.')
+        files[name] = {'sha256':sha256_file(path),'size':path.stat().st_size}
+    data = {'version':VERSION,'files':files}
+    (ROOT / 'version.json').write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
+    return data
+
+def fetch_manifest():
+    """Leer y validar el version.json publicado en GitHub."""
+    req = urllib.request.Request(UPDATE_URL + 'version.json', headers={'User-Agent':'PZDedicatedManager'})
+    try:
+        info = json.loads(https_read(req, 64 * 1024, 15, 'GitHub'))
+    except ValueError as e:
+        raise ValueError(str(e) if 'GitHub' in str(e) else 'El version.json de GitHub no es válido.')
+    if not isinstance(info, dict) or not isinstance(info.get('files'), dict):
+        raise ValueError('El version.json de GitHub no es válido.')
+    version_tuple(info.get('version'))
+    for name in UPDATE_FILES:
+        meta = info['files'].get(name)
+        if not (isinstance(meta, dict) and re.fullmatch(r'[0-9a-f]{64}', str(meta.get('sha256', '')))
+                and type(meta.get('size')) is int and 0 < meta['size'] <= UPDATE_MAX_BYTES):
+            raise ValueError(f'El version.json de GitHub no trae datos válidos de {name}.')
+    return info
+
+def app_status():
+    """Versión instalada y la última publicada (según la última consulta), para la interfaz."""
+    try:
+        newer = bool(UPDATE['latest']) and version_tuple(UPDATE['latest']) > version_tuple(VERSION)
+    except ValueError:
+        newer = False
+    return {'version':VERSION,'latest':UPDATE['latest'],'newer':newer,'checked':UPDATE['checked'],
+            'error':UPDATE['error'],'result':UPDATE['result'],'frozen':FROZEN}
+
+def check_update(data=None):
+    """Consultar en GitHub si hay una versión nueva de la app y recordar el resultado."""
+    try:
+        info = fetch_manifest()
+    except ValueError as e:
+        UPDATE.update(checked=time.time(), error=str(e))
+        raise
+    UPDATE.update(checked=time.time(), latest=info['version'], error='')
+    with LOCK:
+        s = settings()
+        s.update(update_checked=UPDATE['checked'], update_latest=info['version'])
+        save_json(SETTINGS, s)
+    return app_status()
+
+APPLY_SCRIPT = r'''param([string]$Root, [string]$Pids)
+# Generado por PZ Dedicated Manager: cuando la app termina de cerrarse, reemplaza PZManager.exe
+# por la version descargada (ya verificada con SHA-256), deja la anterior como .old y vuelve a abrirla.
+$ErrorActionPreference = 'Stop'
+$log = Join-Path $PSScriptRoot 'aplicar.log'
+foreach ($id in ($Pids -split ',')) {
+  $p = Get-Process -Id ([int]$id) -ErrorAction SilentlyContinue
+  if ($p -and $p.ProcessName -eq 'PZManager') { [void]$p.WaitForExit(120000) }
+}
+$exe = Join-Path $Root 'PZManager.exe'
+$old = $exe + '.old'
+$new = Join-Path $PSScriptRoot 'PZManager.exe'
+$done = $false
+$err = ''
+for ($i = 0; $i -lt 40 -and -not $done; $i++) {
+  try {
+    if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old -Force }
+    Move-Item -LiteralPath $exe -Destination $old -Force
+    try {
+      Move-Item -LiteralPath $new -Destination $exe -Force
+      $done = $true
+    } catch {
+      Move-Item -LiteralPath $old -Destination $exe -Force
+      throw
+    }
+  } catch {
+    $err = $_.Exception.Message
+    Start-Sleep -Milliseconds 500
+  }
+}
+if ($done) { Add-Content -LiteralPath $log -Value 'OK' } else { Add-Content -LiteralPath $log -Value ('ERROR ' + $err) }
+Start-Process -FilePath $exe -WorkingDirectory $Root
+'''
+
+def apply_update(data):
+    """Descargar la versión nueva, verificar su SHA-256 y reemplazar PZManager.exe volviendo a abrir la app."""
+    if not FROZEN:
+        raise ValueError('La app corre desde manager.py: actualizala con git pull.')
+    if not APP['window']:
+        raise ValueError('Solo disponible en la ventana de la app.')
+    require_stopped('actualizar la app')
+    info = fetch_manifest()
+    UPDATE.update(checked=time.time(), latest=info['version'], error='')
+    if version_tuple(info['version']) <= version_tuple(VERSION):
+        raise ValueError('Ya tenés la última versión.')
+    meta = info['files']['PZManager.exe']
+    req = urllib.request.Request(UPDATE_URL + 'PZManager.exe', headers={'User-Agent':'PZDedicatedManager'})
+    body = https_read(req, meta['size'], 120, 'GitHub')
+    if len(body) != meta['size'] or hashlib.sha256(body).hexdigest() != meta['sha256']:
+        raise ValueError('El PZManager.exe descargado no coincide con version.json (puede ser la caché de GitHub '
+                         'después de un cambio reciente). No se instaló nada: probá de nuevo en unos minutos.')
+    stage = DATA / 'update'
+    shutil.rmtree(stage, ignore_errors=True)
+    stage.mkdir(parents=True)
+    (stage / 'PZManager.exe').write_bytes(body)
+    script = stage / 'aplicar.ps1'
+    script.write_text(APPLY_SCRIPT, encoding='utf-8-sig')
+    require_stopped('actualizar la app')
+    # Con PyInstaller (onefile) el proceso padre también es PZManager.exe: el script espera a los dos.
+    subprocess.Popen(['powershell.exe','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-WindowStyle','Hidden',
+                      '-File',str(script),'-Root',str(ROOT),'-Pids',f'{os.getpid()},{os.getppid()}'],
+                     cwd=str(ROOT),stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
+                     creationflags=NO_WINDOW | getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0))
+    def close():
+        time.sleep(0.5)
+        APP['allow_close'] = True
+        APP['window'].destroy()
+    threading.Thread(target=close, daemon=True).start()
+    return {'version':info['version'],'restarting':True}
+
+def update_startup():
+    """Al abrir: informar cómo terminó una actualización, limpiar sus restos y buscar una versión nueva si toca."""
+    s = settings()
+    UPDATE.update(checked=float(s.get('update_checked') or 0), latest=str(s.get('update_latest') or ''))
+    stage = DATA / 'update'
+    try:
+        line = (stage / 'aplicar.log').read_text(encoding='utf-8-sig', errors='replace').strip().splitlines()[-1]
+        UPDATE['result'] = line
+    except (OSError, IndexError):
+        pass
+    shutil.rmtree(stage, ignore_errors=True)
+    try:
+        (ROOT / 'PZManager.exe.old').unlink()
+    except OSError:
+        pass
+    if s.get('auto_update_check', True) and time.time() - UPDATE['checked'] >= UPDATE_EVERY:
+        def worker():
+            try:
+                check_update()
+            except ValueError:
+                pass
+        threading.Thread(target=worker, daemon=True).start()
+
 def ui_state(data):
     """La interfaz avisa si hay cambios sin guardar (para preguntar antes de cerrar la ventana)."""
     APP['dirty'] = bool(data.get('dirty'))
@@ -1211,7 +1692,8 @@ def import_mods(data):
     return {'mods':items}
 
 GET_ROUTES = {'mods':mods,'settings':settings,'status':status,'overview':overview,'logs':latest_logs,'ini':ini_entries,
-              'excluded':excluded_mods,'scan':scan_local,'whitelist':whitelist,'network':network_info}
+              'excluded':excluded_mods,'scan':scan_local,'whitelist':whitelist,'network':network_info,
+              'downloads':workshop_downloads,'characters':characters}
 # (función, si se ejecuta bajo LOCK). Las que esperan al usuario o al servidor no bloquean al resto.
 POST_ROUTES = {
     'mods':(save_mods,True),'settings':(save_settings,True),'validate':(lambda d:validate(),True),
@@ -1223,6 +1705,9 @@ POST_ROUTES = {
     'quit_app':(quit_app,False),'export_mods':(export_mods,False),'import_mods':(import_mods,False),
     'ws_lookup':(workshop_lookup,False),'ws_updates':(workshop_updates,False),
     'restart':(restart_server,False),'restart_cancel':(restart_cancel,False),
+    'purge':(purge_workshop,True),'reinstall':(reinstall_server,True),
+    'delete_characters':(delete_characters,True),'delete_world':(delete_world,True),
+    'app_check':(check_update,False),'app_update':(apply_update,False),
 }
 
 def dispatch(method, path, data=None):
@@ -1425,6 +1910,9 @@ table.wsres td{padding:6px 8px}table.wsres input{margin-top:0}table.wsres input[
 .wstitle small{display:block;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #restartBox{margin-top:12px}#restartInfo{margin:12px 0 0}
 .tablewrap.short{max-height:440px;min-height:0}.tablewrap.auto{max-height:none;min-height:0}
+table.purge{table-layout:fixed;min-width:640px}table.purge th:nth-child(1){width:36px}table.purge th:nth-child(2){width:130px}table.purge th:nth-child(4){width:100px}table.purge th:nth-child(5){width:190px}
+table.purge td{padding:6px 8px}table.purge input[type=checkbox],#purgeAll{width:auto;margin:0}
+.maint{display:grid;gap:8px}.maint+.maint{border-top:1px solid var(--line);padding-top:14px}.maint .actions{margin-top:2px}
 table.users td{padding:7px 8px}table.users select{padding:4px 8px}
 .fwbtns{margin:14px 0 8px}
 .plrow{display:flex;align-items:center;gap:8px;padding:8px 2px;border-top:1px solid var(--line)}
@@ -1450,8 +1938,9 @@ table.users td{padding:7px 8px}table.users select{padding:4px 8px}
 <div id="stale" class="topbanner" hidden>El panel se reinició y esta página quedó vieja. <button class="sm" id="reloadPage">Recargar</button></div>
 
 <header class="top">
- <div class="brand"><div class="logo">PZ</div><div><b>Dedicated Manager</b><small>Servidor <span id="hdrName" class="mono">…</span></small></div></div>
+ <div class="brand"><div class="logo">PZ</div><div><b>Dedicated Manager</b><small>Servidor <span id="hdrName" class="mono">…</span> <span id="hdrVer"></span></small></div></div>
  <div id="hdrPill" class="pill s-off"><span class="dot"></span><span id="hdrState">Cargando…</span><span id="hdrUptime" class="uptime"></span></div>
+ <button id="hdrUpdate" class="primary" data-act="appUpdate" hidden></button>
  <button id="hdrStart" class="go" data-act="start">&#9654; Iniciar</button>
  <button id="hdrStop" class="stop" data-act="stop" hidden>&#9632; Detener</button>
 </header>
@@ -1508,7 +1997,7 @@ table.users td{padding:7px 8px}table.users select{padding:4px 8px}
 
 <section id="tab-mods" class="tab">
  <div class="pagehead"><div><h1>Mods</h1><p class="hint">El orden de la lista es el orden de carga: arrastrá &#8942;&#8942; o cambiá el número para moverlos.</p></div>
-  <div class="actions"><button class="primary" id="btnWsOpen">Agregar desde Workshop</button><button data-act="wscheck">Buscar actualizaciones</button><button id="btnScan">Verificar archivos locales</button><button id="btnDetect">Completar Workshop IDs</button><button id="btnImport">Importar</button><button id="btnExport">Exportar</button><input type="file" id="importFile" accept=".json,application/json" hidden></div></div>
+  <div class="actions"><button class="primary" id="btnWsOpen">Agregar desde Workshop</button><button data-act="wscheck">Buscar actualizaciones</button><button id="btnScan">Verificar archivos locales</button><button id="btnPurge">Limpiar descargas</button><button id="btnDetect">Completar Workshop IDs</button><button id="btnImport">Importar</button><button id="btnExport">Exportar</button><input type="file" id="importFile" accept=".json,application/json" hidden></div></div>
  <div class="card">
   <form id="addForm" class="addrow"><input id="newId" class="mono" placeholder="Mod ID nuevo (ej. Brita)" autocomplete="off"><input id="newWid" placeholder="Workshop ID o URL de Steam (opcional)" autocomplete="off"><button class="primary" type="submit">+ Agregar mod</button></form>
   <div class="toolbar">
@@ -1548,6 +2037,11 @@ table.users td{padding:7px 8px}table.users select{padding:4px 8px}
   <form id="wlAdd" class="addrow"><input id="wlUser" placeholder="Usuario nuevo" autocomplete="off" spellcheck="false"><input id="wlPass" type="password" placeholder="Contraseña de esa cuenta" autocomplete="new-password"><button class="primary" type="submit" id="wlAddBtn">+ Agregar a la whitelist</button></form>
   <div class="tablewrap short"><table class="users"><thead><tr><th>Usuario</th><th>Rol</th><th>Último ingreso</th><th>SteamID</th><th>Estado</th><th></th></tr></thead><tbody id="wlRows"></tbody></table><p id="wlEmpty" class="empty" hidden>No hay cuentas para mostrar.</p></div>
   <div id="wlBans"></div>
+ </div>
+ <div class="card">
+  <div class="cardhead"><div><h2>Personajes guardados <span id="chCount" class="badge b-muted">0</span></h2><p class="hint mono" id="chDb"></p></div></div>
+  <p class="hint">Borrar un personaje lo saca del mundo: al volver a entrar, el jugador crea uno nuevo y conserva su cuenta, su rol y la whitelist. Se hace con el servidor detenido y antes se guarda una copia de <code>players.db</code> en <code>backups\personajes</code>.</p>
+  <div class="tablewrap short"><table class="users"><thead><tr><th>Personaje</th><th>Usuario</th><th>Estado</th><th>Posición</th><th></th></tr></thead><tbody id="chRows"></tbody></table><p id="chEmpty" class="empty" hidden>No hay personajes guardados.</p></div>
  </div>
 </section>
 
@@ -1592,6 +2086,21 @@ table.users td{padding:7px 8px}table.users select{padding:4px 8px}
    <label class="chk"><span class="switch"><input type="checkbox" id="s-strict"><span></span></span>Modo estricto: no aplicar al INI ni iniciar si hay mods activos con advertencias</label>
    <div class="field"><label for="s-extra">Carpetas Workshop adicionales</label><textarea id="s-extra" rows="3" class="mono" placeholder="Una ruta por línea, ej. D:\SteamLibrary\steamapps\workshop\content\108600"></textarea><p class="hint">Se usan para verificar mods y completar Workshop IDs. Las bibliotecas del cliente Steam se detectan solas.</p></div>
   </div></div>
+  <div class="card"><h2>Mantenimiento del servidor</h2><p class="hint">Estas acciones borran datos: piden el servidor detenido y una confirmación.</p><div class="form">
+   <div class="maint"><b>Reinstalar servidor</b>
+    <p class="hint">Borra los archivos del juego de la carpeta del servidor y los vuelve a descargar con SteamCMD (unos 7 GB). No toca tus mundos, el INI, las cuentas ni la configuración de la app. Para solo reparar archivos alcanza con <b>Actualizar servidor</b> en Inicio.</p>
+    <label class="chk"><input type="checkbox" id="keepMods" checked> Conservar los mods descargados</label>
+    <div class="actions"><button class="danger" data-act="reinstall" data-maint>Reinstalar servidor</button></div></div>
+   <div class="maint"><b>Borrar mundo</b>
+    <p class="hint">Borra el mundo guardado para que el servidor genere uno nuevo al iniciar. Conserva el INI, el sandbox, las zonas de aparición, las cuentas y los baneos, y cambia el <code>ResetID</code> para que los jugadores descarten su copia del mapa anterior.</p>
+    <label class="chk"><input type="checkbox" id="worldBackup" checked> Guardar una copia en <code>backups\mundos</code></label>
+    <div class="actions"><button class="danger" data-act="deleteWorld" data-maint>Borrar mundo</button><button data-open="backups">Abrir copias</button></div></div>
+  </div></div>
+  <div class="card"><h2>Versión de la app</h2><p class="hint" id="appVerText"></p>
+   <div class="actions"><button data-act="appCheck">Buscar actualización</button><button class="primary" data-act="appUpdate" id="btnAppUpdate" hidden>Actualizar</button></div>
+   <div class="form"><label class="chk"><span class="switch"><input type="checkbox" id="s-auto_update_check"><span></span></span>Buscar actualizaciones al abrir la app (como mucho cada 12 horas)</label>
+   <p class="hint">Las versiones se publican en GitHub (HebrineX/Pz-Admin-LocatedServer). Antes de instalar, la app verifica la huella SHA-256 de lo que descargó; el reemplazo pide el servidor detenido y la app se vuelve a abrir sola.</p></div>
+  </div>
  </div>
 </section>
 
@@ -1609,6 +2118,11 @@ table.users td{padding:7px 8px}table.users select{padding:4px 8px}
  <p class="hint" id="wsInfo"></p>
  <div class="tablewrap short" id="wsWrap" hidden><table class="wsres"><thead><tr><th><input type="checkbox" id="wsAll" aria-label="Seleccionar todos"></th><th>Mod ID</th><th>Mod en Workshop</th><th>Actualizado</th><th>Estado</th></tr></thead><tbody id="wsRows"></tbody></table></div>
  <div class="actions"><button class="primary" type="button" id="wsAdd" disabled>Agregar seleccionados</button><button type="button" id="wsClose">Cerrar</button></div>
+</dialog>
+<dialog id="purgeDlg" class="wide"><h2>Mods descargados que el servidor ya no usa</h2>
+ <p id="purgeInfo"></p>
+ <div class="tablewrap short" id="purgeWrap"><table class="purge"><thead><tr><th><input type="checkbox" id="purgeAll" aria-label="Seleccionar todos"></th><th>Workshop ID</th><th>Mod</th><th>Tamaño</th><th>Estado</th></tr></thead><tbody id="purgeRows"></tbody></table></div>
+ <div class="actions"><button class="danger" type="button" id="purgeGo" disabled>Borrar seleccionados</button><button type="button" id="purgeClose">Cerrar</button></div>
 </dialog>
 
 <script>
@@ -1644,7 +2158,7 @@ function switchEl(checked,onchange,label){
 }
 const fmtDur=s=>{s=Math.max(0,Math.floor(s));const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;return(h?h+'h ':'')+(h?String(m).padStart(2,'0'):m)+'m '+String(x).padStart(2,'0')+'s'};
 const fmtTime=t=>new Date(t*1000).toLocaleString('es-AR',{dateStyle:'short',timeStyle:'short'});
-const fmtSize=b=>b<1024?b+' B':b<1048576?(b/1024).toFixed(1)+' KB':(b/1048576).toFixed(1)+' MB';
+const fmtSize=b=>b<1024?b+' B':b<1048576?(b/1024).toFixed(1)+' KB':b<1073741824?(b/1048576).toFixed(1)+' MB':(b/1073741824).toFixed(2)+' GB';
 const basename=p=>String(p||'').split(/[\\/]/).pop();
 
 /* ---------- API, avisos y diálogos ---------- */
@@ -1744,7 +2258,22 @@ function renderStatus(){
   if(p&&!!p.can_command!==!!st.can_command&&S.tab==='players')run(loadPlayersTab);
   const err=st.restart&&st.restart.error;
   if(p&&err&&err!==(p.restart&&p.restart.error))toast('No se pudo completar el reinicio: '+err,'err');
+  if(p&&S.chars&&!!(p.running||p.external)!==!!(st.running||st.external))renderCharacters();
+  renderApp();
   S.prev=st;
+}
+function renderApp(){
+  const a=(S.status&&S.status.app)||{};if(!a.version)return;
+  const up=!!a.newer;
+  $('#hdrVer').textContent='· v'+a.version;
+  $('#hdrUpdate').hidden=!up;$('#hdrUpdate').textContent='Actualizar a '+a.latest;
+  $('#btnAppUpdate').hidden=!up;
+  $('#appVerText').textContent='Versión instalada: '+a.version+'. '+(a.latest?(up?'Disponible en GitHub: '+a.latest+'.':'Es la última publicada.'):'Todavía no se consultó GitHub.')+(a.checked?' Última consulta: '+fmtTime(a.checked)+'.':'')+(a.error?' Error: '+a.error:'');
+  if(a.result&&!S.appResult){
+    S.appResult=true;
+    const ok=a.result==='OK';
+    toast(ok?'La app se actualizó a la versión '+a.version+'.':'No se pudo instalar la actualización ('+a.result.replace(/^ERROR\s*/,'')+'). Seguís con la versión '+a.version+'.',ok?'ok':'err',{timeout:12000});
+  }
 }
 function renderRestart(){
   const st=S.status||{},r=st.restart,active=!!(r&&r.phase);
@@ -1759,7 +2288,7 @@ function updateButtons(){
   $$('[data-act=start]').forEach(b=>b.disabled=busy);
   $$('[data-act=stop]').forEach(b=>{b.disabled=!(srv&&!st.stopping)&&!upd;if(b.id==='hdrStop')b.textContent=upd?'\u25A0 Cancelar':'\u25A0 Detener'});
   $$('[data-act=kill]').forEach(b=>b.disabled=!busy);
-  $$('[data-act=update]').forEach(b=>b.disabled=busy);
+  $$('[data-act=update],[data-maint],[data-act=appUpdate]').forEach(b=>b.disabled=busy);
   $$('[data-cmd],#btnBroadcast,#btnBroadcast2').forEach(b=>b.disabled=!st.can_command);
   $('#hdrStart').hidden=busy;$('#hdrStop').hidden=!(st.running);
   const c=$('#cmd');c.disabled=!st.can_command;$('#cmdSend').disabled=!st.can_command;
@@ -1863,6 +2392,38 @@ const ACTIONS={
     const j=await api('apply','POST',{});
     toast('INI actualizado: '+j.mod_count+' mods y '+j.workshop_count+' Workshop IDs.\nCopia de seguridad: '+basename(j.backup)+(j.warnings.length?'\n'+j.warnings.length+' advertencia(s).':''),j.warnings.length?'warn':'ok');
     loadOverview();if(S.ini)loadIni();
+    // Si se quitaron mods del catálogo, ofrecer borrar también sus archivos del servidor.
+    openPurge(true).catch(()=>{});
+  },
+  async reinstall(){
+    const keep=$('#keepMods').checked;
+    if(!await confirmBox('Reinstalar servidor','Se borran los archivos del juego en la carpeta del servidor'+(keep?' (se conservan los mods descargados)':', incluidos los mods descargados,')+' y se vuelven a descargar con SteamCMD. Tus mundos, el INI y las cuentas no se tocan.','Borrar y reinstalar','stop'))return;
+    toast('Borrando los archivos del servidor… puede tardar un minuto.','info');
+    await api('reinstall','POST',{keep_mods:keep});
+    toast('Archivos borrados. SteamCMD está descargando el servidor.','info');
+    S.status=await api('status');renderStatus();showTab('console');
+  },
+  async deleteWorld(){
+    const name=S.settings.server_name,backup=$('#worldBackup').checked;
+    const typed=await ask('Borrar mundo','Se borra el mundo de '+name+(backup?' (queda una copia en backups\\mundos)':' sin guardar copia')+'. Al iniciar, el servidor genera uno nuevo.\nPara confirmar, escribí el nombre del servidor.',[{k:'ok',t:'Borrar mundo',cls:'stop'},{k:null,t:'Cancelar'}],name);
+    if(typed===null)return;
+    if(typed.trim()!==name)return toast('El nombre no coincide: no se borró nada.','err');
+    const j=await api('delete_world','POST',{confirm:typed.trim(),backup});
+    toast('Mundo borrado: el servidor genera uno nuevo al iniciar.'+(j.backup?'\nCopia: '+j.backup:'')+(j.reset_id?'\nResetID nuevo: '+j.reset_id:''),'ok',{timeout:10000});
+    S.chars=null;if(S.ini)loadIni();
+  },
+  async appCheck(){
+    const a=await api('app_check','POST',{});
+    S.status.app=a;renderApp();
+    toast(a.newer?'Hay una versión nueva: '+a.latest+'.':'Tenés la última versión ('+a.version+').',a.newer?'info':'ok');
+  },
+  async appUpdate(){
+    const a=(S.status&&S.status.app)||{};
+    if(!a.frozen)return toast('La app corre desde manager.py: actualizala con git pull.','info');
+    if(!await confirmBox('Actualizar la app','Se descarga la versión '+(a.latest||'nueva')+' desde GitHub, se verifica su huella SHA-256 y la app se vuelve a abrir sola.','Actualizar y reiniciar'))return;
+    toast('Descargando la versión nueva…','info');
+    await api('app_update','POST',{});
+    $('#closing h2').textContent='Actualizando…';$('#closing p').textContent='La app se cierra y se vuelve a abrir con la versión nueva.';$('#closing').hidden=false;
   },
   async wscheck(){
     if(modsDirty())toast('Se revisa el catálogo guardado: los cambios sin guardar no se incluyen.','info');
@@ -2056,6 +2617,46 @@ function renderExcluded(){
   }));
 }
 
+/* ---------- Mods descargados que sobran ---------- */
+const PURGE={items:[],sel:new Set(),running:false};
+const PURGE_STATE={removed:['Quitado del catálogo','b-warn'],inactive:['Inactivo en el catálogo','b-muted']};
+async function openPurge(onlyRemoved){
+  const d=await api('downloads');
+  const items=d.items.filter(x=>x.state!=='used');
+  if(onlyRemoved&&!items.some(x=>x.state==='removed'))return;
+  PURGE.items=items;PURGE.running=d.running;
+  // Por defecto se marcan los que ya no están en el catálogo; los inactivos quedan a elección.
+  PURGE.sel=new Set(items.filter(x=>x.state==='removed').map(x=>x.workshop_id));
+  const total=items.reduce((n,x)=>n+x.size,0);
+  $('#purgeInfo').textContent=items.length?items.length+' mod(s) descargados que el servidor ya no usa ('+fmtSize(total)+'), en '+d.folder+'. Se borran su carpeta y su registro de Steam; si después volvés a activar uno, el servidor lo descarga de nuevo.'+(d.running?'\nDetené el servidor para poder borrarlos.':''):'No hay mods descargados sin usar en '+d.folder+'.';
+  $('#purgeWrap').hidden=!items.length;
+  renderPurge();
+  $('#purgeDlg').showModal();
+}
+function renderPurge(){
+  $('#purgeRows').replaceChildren(...PURGE.items.map(x=>{
+    const [label,cls]=PURGE_STATE[x.state]||['',''];
+    const box=el('input',{type:'checkbox',checked:PURGE.sel.has(x.workshop_id),'aria-label':'Borrar '+x.workshop_id,onchange:e=>{e.target.checked?PURGE.sel.add(x.workshop_id):PURGE.sel.delete(x.workshop_id);purgeButtons()}});
+    return el('tr',{},el('td',{},box),el('td',{class:'mono',text:x.workshop_id}),
+      el('td',{class:'wstitle',text:x.title||x.mods.join(', ')||'–',title:x.mods.length?'Mod ID: '+x.mods.join(', '):null}),
+      el('td',{text:fmtSize(x.size)}),el('td',{},el('span',{class:'badge '+cls,text:label})));
+  }));
+  purgeButtons();
+}
+function purgeButtons(){
+  const n=PURGE.sel.size;
+  $('#purgeAll').checked=n>0&&n===PURGE.items.length;
+  $('#purgeGo').disabled=!n||PURGE.running;
+  $('#purgeGo').textContent=n?'Borrar '+n+' seleccionado(s)':'Borrar seleccionados';
+}
+async function purgeGo(){
+  const ids=[...PURGE.sel];if(!ids.length)return;
+  const j=await api('purge','POST',{ids});
+  $('#purgeDlg').close();
+  toast('Se borraron '+j.removed.length+' mod(s) y se liberaron '+fmtSize(j.freed)+'.'+(j.errors.length?'\nNo se pudieron borrar: '+j.errors.slice(0,3).join('; '):''),j.errors.length?'warn':'ok',{timeout:9000});
+  scanLocal(true);
+}
+
 /* ---------- Agregar desde Workshop ---------- */
 const WS={rows:[]};
 function openWorkshop(){
@@ -2238,7 +2839,28 @@ async function saveIni(){
 /* ---------- Jugadores y whitelist ---------- */
 let PL_TIMER=null;
 function playersTimer(on){clearInterval(PL_TIMER);PL_TIMER=null;if(on)PL_TIMER=setInterval(()=>{if($('#plAuto').checked&&S.status.can_command)loadPlayers(true)},30000)}
-async function loadPlayersTab(){await Promise.all([loadPlayers(true),loadWhitelist()])}
+async function loadPlayersTab(){await Promise.all([loadPlayers(true),loadWhitelist(),loadCharacters()])}
+async function loadCharacters(){S.chars=await api('characters');renderCharacters()}
+function renderCharacters(){
+  const c=S.chars;if(!c)return;
+  const q=$('#wlSearch').value.trim().toLowerCase(),st=S.status||{},busy=!!(st.running||st.external);
+  $('#chDb').textContent=c.exists?'Mundo: '+basename(c.db.replace(/[\\/]players\.db$/,'')):'Todavía no hay un mundo guardado: se crea al iniciar el servidor.';
+  $('#chCount').textContent=c.characters.length;
+  const rows=c.characters.filter(x=>!q||x.username.toLowerCase().includes(q)||x.name.toLowerCase().includes(q)||(x.steamid||'').includes(q));
+  $('#chRows').replaceChildren(...rows.map(x=>el('tr',{},
+    el('td',{},el('b',{text:x.name||'(sin nombre)'})),
+    el('td',{text:x.username}),
+    el('td',{},el('span',{class:'badge '+(x.dead?'b-muted':'b-ok'),text:x.dead?'Muerto':'Vivo'})),
+    el('td',{class:'mono hint',text:x.pos||'–'}),
+    el('td',{},el('button',{class:'sm danger',text:'Borrar',disabled:busy,title:busy?'Detené el servidor para borrar personajes':null,onclick:e=>run(()=>deleteCharacter(x),e.currentTarget)})))));
+  $('#chEmpty').hidden=rows.length>0;
+}
+async function deleteCharacter(x){
+  if(!await confirmBox('Borrar personaje','Se borra '+(x.name||'el personaje')+' de la cuenta '+x.username+'. Al volver a entrar va a crear un personaje nuevo; su cuenta, su rol y la whitelist no cambian. Antes se guarda una copia de players.db.','Borrar personaje','stop'))return;
+  const j=await api('delete_characters','POST',{ids:[x.id]});
+  toast(j.deleted?'Personaje borrado. Copia: '+basename(j.backup):'El personaje ya no estaba en players.db.',j.deleted?'ok':'info');
+  await loadCharacters();
+}
 async function loadPlayers(quiet){
   const box=$('#plList'),can=!!S.status.can_command;
   $('#plOffline').hidden=can;
@@ -2386,6 +3008,7 @@ async function loadSettings(){
   const s=S.settings=await api('settings');
   for(const k of SET_KEYS)$('#s-'+k).value=s[k]||'';
   $('#s-strict').checked=!!s.strict;$('#s-ram_gb').value=s.ram_gb||'';
+  $('#s-auto_update_check').checked=s.auto_update_check!==false;
   $('#s-extra').value=(s.extra_workshop_paths||[]).join('\n');
   $('#hdrName').textContent=s.server_name;
 }
@@ -2393,6 +3016,7 @@ async function saveSettings(){
   const body={...S.settings};
   for(const k of SET_KEYS)body[k]=$('#s-'+k).value.trim();
   body.strict=$('#s-strict').checked;body.ram_gb=+$('#s-ram_gb').value||0;
+  body.auto_update_check=$('#s-auto_update_check').checked;
   body.extra_workshop_paths=$('#s-extra').value.split('\n').map(x=>x.trim()).filter(Boolean);
   S.settings=await api('settings','POST',body);
   toast('Configuración guardada.');
@@ -2429,6 +3053,10 @@ $$('#modFilter button').forEach(b=>b.addEventListener('click',()=>{S.filter=b.da
 const bulk=v=>{for(const tr of $('#modRows').children)S.mods[+tr.dataset.i].enabled=v;renderMods();updateBars()};
 $('#bulkOn').onclick=()=>bulk(true);$('#bulkOff').onclick=()=>bulk(false);
 $('#btnScan').onclick=e=>run(()=>scanLocal(false),e.currentTarget);
+$('#btnPurge').onclick=e=>run(()=>openPurge(false),e.currentTarget);
+$('#purgeAll').onchange=e=>{PURGE.sel=new Set(e.target.checked?PURGE.items.map(x=>x.workshop_id):[]);renderPurge()};
+$('#purgeGo').onclick=e=>run(purgeGo,e.currentTarget);
+$('#purgeClose').onclick=()=>$('#purgeDlg').close();
 $('#btnWsOpen').onclick=openWorkshop;
 $('#wsForm').onsubmit=e=>{e.preventDefault();run(wsLookup,$('#wsFind'))};
 $('#wsAll').onchange=e=>{for(const r of WS.rows)if(wsState(r).can)r.checked=e.target.checked;$$('#wsRows input[type=checkbox]').forEach(b=>{if(!b.disabled)b.checked=e.target.checked});wsButtons()};
@@ -2470,7 +3098,7 @@ const broadcast=e=>run(async()=>{
 },e.currentTarget);
 $('#btnBroadcast').onclick=broadcast;$('#btnBroadcast2').onclick=broadcast;
 $('#plRefresh').onclick=e=>run(loadPlayersTab,e.currentTarget);
-$('#wlSearch').addEventListener('input',renderWhitelist);
+$('#wlSearch').addEventListener('input',()=>{renderWhitelist();renderCharacters()});
 $('#wlAdd').onsubmit=e=>{
   e.preventDefault();
   const u=$('#wlUser').value.trim(),p=$('#wlPass').value;
@@ -2656,6 +3284,7 @@ def run_app():
                                    min_size=(960, 620), background_color='#0a0f17', text_select=True)
     APP['window'] = window
     window.events.closing += on_closing
+    update_startup()
     icon = ROOT / 'pz.ico'
     # private_mode: WebView2 no guarda cookies ni almacenamiento entre sesiones.
     webview.start(private_mode=True, icon=str(icon) if icon.is_file() else None)
@@ -2666,7 +3295,7 @@ def main():
     global PORT
     ensure()
     parser=argparse.ArgumentParser(description='Administrador local Project Zomboid')
-    parser.add_argument('command',nargs='?',choices=['app','web','validate','detect','apply','start','update'],default='app')
+    parser.add_argument('command',nargs='?',choices=['app','web','validate','detect','apply','start','update','release'],default='app')
     parser.add_argument('--no-browser',action='store_true',help='No abrir el navegador al iniciar el panel')
     parser.add_argument('--port',type=int,help='Puerto del panel (por defecto, el de data/settings.json)')
     args=parser.parse_args()
@@ -2697,7 +3326,8 @@ def main():
         finally:
             httpd.server_close()
     else:
-        commands={'validate':validate,'detect':autodetect,'apply':apply_config,'start':lambda:launch('server'),'update':lambda:launch('update')}
+        commands={'validate':validate,'detect':autodetect,'apply':apply_config,'start':lambda:launch('server'),'update':lambda:launch('update'),
+                  'release':release_manifest}
         result = commands[args.command]()
         print(json.dumps(result,ensure_ascii=False,indent=2))
         if args.command == 'start':

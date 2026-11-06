@@ -26,6 +26,7 @@ Problemas conocidos del harness (no se arreglan desde este proyecto):
 - **H-01**: `.hebrinex/PROJECT_BINDING.yaml` es la plantilla del producto. El binding real es el de `instance/`. Por eso `validate-release` falla en este proyecto.
 - **H-02**: `instance/sdd/progress/state.yaml` heredó el ciclo del harness (`C-010/P06`). No es un ciclo de este proyecto.
 - **H-03**: `memory-registry.yaml` cita rutas legacy `orquestador/memory/...`. Resolverlas con `instance_path_map` (`local`, `project`, `daily`, `cycle` y `complete` viven en `instance/memory/`; `session-pin.md` sigue en `orquestador/memory/local/`).
+- **H-04**: `validate-harness.ps1` falla con Windows PowerShell 5.1 en el roundtrip del writeguard (el hook responde bien llamado directo). Ejecutarlo con `pwsh` (PowerShell 7).
 
 ## 2. Inicio de sesión
 
@@ -46,7 +47,7 @@ No cargar por defecto: README ni CHANGELOG del harness, `init.sh`, `prompts/`, m
   - rutas fuera del proyecto;
   - cambios de estado SDD.
 - El `SI` aprueba el alcance agrupado que declara el preflight, nada más. Si el alcance cambia, hace falta un preflight nuevo.
-- IDs de aprobación: `PZ-<ÁREA>-NNN` (usados: `PZ-HBX-001`, `PZ-INST-001`, `PZ-WS-001`).
+- IDs de aprobación: `PZ-<ÁREA>-NNN` (usados: `PZ-HBX-001`, `PZ-INST-001`, `PZ-WS-001`, `PZ-GIT-001`, `PZ-MANT-001`).
 - Antes de implementar, hacer la pasada del **detractor senior** (`.hebrinex/agents/detractor-senior.md`) y mostrar su salida en el preflight.
 
 Formato del preflight (el del kernel):
@@ -76,8 +77,11 @@ Requiere SI: SI
 | `initial_mods.json` | Catálogo semilla. Se copia a `data\mods.json` en el primer inicio. |
 | `mods_excluidos_sin_workshop_id.json` | Mods apartados por no tener Workshop ID. Se recuperan desde la pestaña Mods. |
 | `pz.ico` | Ícono de la app y de los accesos directos. |
+| `version.json` | Versión publicada y SHA-256 de `PZManager.exe`. Lo genera `crear_exe.bat` (`manager.py release`); las apps instaladas lo leen de `master` para ofrecer la actualización. |
 
-La app y el instalador crean al usarse `data/`, `logs/`, `server/` y `steamcmd/`; la compilación crea `build/` y `dist/`. Todo eso está en `.gitignore`.
+La app y el instalador crean al usarse `data/`, `logs/`, `server/`, `steamcmd/` y `backups/` (copias de mundos y de `players.db`); la compilación crea `build/` y `dist/`. Todo eso está en `.gitignore`.
+
+Versiones: `VERSION` en `manager.py`. Para publicar, subirla, ejecutar `crear_exe.bat` y subir `PZManager.exe`, `version.json` y `manager.py` a `master`.
 
 ## 5. Reglas del producto (no negociables)
 
@@ -86,9 +90,10 @@ La app y el instalador crean al usarse `data/`, `logs/`, `server/` y `steamcmd/`
 - **La ventana no sale a Internet**: la CSP de `PAGE` mantiene `connect-src 'self'`. Cualquier acceso a la red lo hace Python, con host fijo, TLS verificado, timeout y límite de tamaño.
 - **Datos no confiables** (Steam, logs, DB, INI): se muestran con `textContent`. Nunca usar `innerHTML`: un XSS tendría acceso al puente.
 - **Dependencias**: backend solo con la biblioteca estándar. pywebview es la única dependencia en tiempo de ejecución y PyInstaller solo compila. Una dependencia nueva necesita la pasada del detractor y `SI`.
-- **Jugadores y whitelist**: la DB de PZ se abre solo en lectura (`mode=ro`). Los cambios se hacen como comandos de consola.
+- **Jugadores y whitelist**: la DB de cuentas (`Zomboid\db\<servidor>.db`) se abre solo en lectura (`mode=ro`); sus cambios se hacen como comandos de consola. La única excepción es `players.db` del mundo, para borrar personajes: con el servidor detenido y copia previa en `backups\personajes` (D-013).
+- **Acciones que borran datos** (limpiar mods, reinstalar, borrar personajes o el mundo): servidor y SteamCMD detenidos (`require_stopped`), confirmación en la UI, rutas validadas con `inside()` y nunca a través de enlaces o junctions (`is_link`). Reinstalar solo vacía una carpeta que parece un servidor de PZ y no contiene la app, `Zomboid`, SteamCMD ni el perfil del usuario.
 - **Firewall**: una regla de entrada solo UDP, solo para el `java.exe` del servidor y solo en el perfil actual. RCON nunca se abre.
-- **Descargas**: un binario descargado se ejecuta solo con firma Authenticode válida de Microsoft (WebView2) o Valve (`O=Valve` / `O=Valve Corp.`).
+- **Descargas**: un binario descargado se ejecuta solo con firma Authenticode válida de Microsoft (WebView2) o Valve (`O=Valve` / `O=Valve Corp.`). Única excepción, la actualización de la propia app (D-014): `PZManager.exe` desde `raw.githubusercontent.com/HebrineX/Pz-Admin-LocatedServer/master`, aceptado solo si su tamaño y su SHA-256 coinciden con `version.json` del mismo repositorio.
 - **Escrituras del usuario**: el INI se modifica con `write_ini_keys` (deja un `.bak`); `Mods` y `WorkshopItems` solo con *Aplicar*. El catálogo cambia solo con *Guardar*.
 - **Pruebas**: nunca usar el servidor real del operador, sus mundos (`%USERPROFILE%\Zomboid`), su INI ni su DB. Probar en una carpeta temporal con `settings.json` propio y un servidor falso cuando haga falta.
 
@@ -118,4 +123,5 @@ instalar.bat -Verificar
 
 - Remoto `origin`: https://github.com/HebrineX/Pz-Admin-LocatedServer.git, rama `master`.
 - Commit y push solo cuando el operador lo pide, con preflight y `SI`.
+- Los commits van solo a nombre del operador: sin `Co-Authored-By`, sin "Generated with" ni ningún otro crédito a agentes o herramientas, ni en commits ni en PRs (D-015).
 - `.hebrinex/` y los datos de ejecución nunca se suben.
