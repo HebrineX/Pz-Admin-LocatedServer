@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Instalador MSI por usuario de PZ Dedicated Manager (WiX 5). Lo arma crear_msi.bat.
+  - Sin administrador: instala en la carpeta que elija el usuario (por defecto %LOCALAPPDATA%\PZManager).
+  - Solo copia los archivos de la app; SteamCMD, el servidor y WebView2 los baja instalar.ps1 al terminar.
+  - Desinstalar saca únicamente lo instalado: data, logs, server, steamcmd, backups y los mundos quedan.
+  - UpgradeCode fijo: no cambiarlo nunca, o una versión nueva no reemplazaría a la anterior.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <Package Name="PZ Dedicated Manager" Manufacturer="HebrineX" Version="$(var.Version)" Scope="perUser"
+           UpgradeCode="{40C4A53E-65A3-48D3-9743-A6F0B408C820}" Language="3082" Codepage="1252">
+    <MajorUpgrade DowngradeErrorMessage="Ya está instalada una versión más nueva de PZ Dedicated Manager." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="pz.ico" SourceFile="$(var.Root)\pz.ico" />
+    <Property Id="ARPPRODUCTICON" Value="pz.ico" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/HebrineX/Pz-Admin-LocatedServer" />
+
+    <!-- Una versión nueva se instala en la misma carpeta que la anterior (ahí están data, server y backups). -->
+    <Property Id="INSTALLFOLDER">
+      <RegistrySearch Id="PreviousInstallFolder" Root="HKCU" Key="Software\HebrineX\PZ Dedicated Manager" Name="InstallFolder" Type="raw" />
+    </Property>
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="INSTALLFOLDER" Name="PZManager" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="MenuFolder" Name="PZ Dedicated Manager" />
+    </StandardDirectory>
+    <StandardDirectory Id="DesktopFolder" />
+
+    <!-- Por usuario, cada componente usa una clave de HKCU como KeyPath (ICE38/ICE43); por eso los GUID son fijos. -->
+    <Component Id="AppFiles" Directory="INSTALLFOLDER" Guid="{05767E72-34E3-45FA-8A71-28D031DDBB0D}">
+      <RegistryValue Root="HKCU" Key="Software\HebrineX\PZ Dedicated Manager" Name="InstallFolder" Type="string" Value="[INSTALLFOLDER]" KeyPath="yes" />
+      <File Id="PZManagerExe" Source="$(var.Root)\PZManager.exe" />
+      <File Id="PzIco" Source="$(var.Root)\pz.ico" />
+      <File Id="InstalarBat" Source="$(var.Root)\instalar.bat" />
+      <File Id="InstalarPs1" Source="$(var.Root)\instalar.ps1" />
+      <File Id="Readme" Source="$(var.Root)\README.md" />
+      <File Id="InitialMods" Source="$(var.Root)\initial_mods.json" />
+      <File Id="ExcludedMods" Source="$(var.Root)\mods_excluidos_sin_workshop_id.json" />
+      <!-- Solo se borra si quedó vacía: los datos que crea la app no se tocan. -->
+      <RemoveFolder Id="RemoveInstallFolder" On="uninstall" />
+    </Component>
+
+    <Component Id="Shortcuts" Directory="MenuFolder" Guid="{F1DFA49B-5D8E-4BEC-A0F9-5C40C1DDF3D1}">
+      <RegistryValue Root="HKCU" Key="Software\HebrineX\PZ Dedicated Manager" Name="Shortcuts" Type="integer" Value="1" KeyPath="yes" />
+      <Shortcut Id="MenuApp" Name="PZ Dedicated Manager" Description="Administrar el servidor dedicado de Project Zomboid"
+                Target="[INSTALLFOLDER]PZManager.exe" WorkingDirectory="INSTALLFOLDER" Icon="pz.ico" />
+      <Shortcut Id="MenuDeps" Name="Instalar o reparar dependencias" Description="SteamCMD, servidor dedicado y WebView2 (instalar.bat)"
+                Target="[INSTALLFOLDER]instalar.bat" Arguments="-SinAccesos" WorkingDirectory="INSTALLFOLDER" Icon="pz.ico" />
+      <Shortcut Id="DesktopApp" Directory="DesktopFolder" Name="PZ Dedicated Manager" Description="Administrar el servidor dedicado de Project Zomboid"
+                Target="[INSTALLFOLDER]PZManager.exe" WorkingDirectory="INSTALLFOLDER" Icon="pz.ico" />
+      <RemoveFolder Id="RemoveMenuFolder" On="uninstall" />
+    </Component>
+
+    <!-- Al terminar, instalar.bat baja lo pesado en su propia consola, fuera de msiexec. -->
+    <CustomAction Id="RunDeps" Directory="INSTALLFOLDER" Return="asyncNoWait" Impersonate="yes" Execute="immediate"
+                  ExeCommand="&quot;[System64Folder]cmd.exe&quot; /c start &quot;Instalar dependencias&quot; &quot;[INSTALLFOLDER]instalar.bat&quot; -SinAccesos" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Instalar ahora SteamCMD, el servidor (unos 7 GB) y WebView2 si falta, y abrir la app" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
+
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+    <UI>
+      <!-- Sin pantalla de licencia: Bienvenida -> Carpeta. -->
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="InstallDirDlg" Condition="NOT Installed" Order="2" />
+      <Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" Order="2" />
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="RunDeps" Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed" Order="2" />
+    </UI>
+
+    <Feature Id="Main" Title="PZ Dedicated Manager">
+      <ComponentRef Id="AppFiles" />
+      <ComponentRef Id="Shortcuts" />
+    </Feature>
+  </Package>
+</Wix>

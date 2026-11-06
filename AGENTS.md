@@ -47,7 +47,7 @@ No cargar por defecto: README ni CHANGELOG del harness, `init.sh`, `prompts/`, m
   - rutas fuera del proyecto;
   - cambios de estado SDD.
 - El `SI` aprueba el alcance agrupado que declara el preflight, nada más. Si el alcance cambia, hace falta un preflight nuevo.
-- IDs de aprobación: `PZ-<ÁREA>-NNN` (usados: `PZ-HBX-001`, `PZ-INST-001`, `PZ-WS-001`, `PZ-GIT-001`, `PZ-MANT-001`).
+- IDs de aprobación: `PZ-<ÁREA>-NNN` (usados: `PZ-HBX-001`, `PZ-INST-001`, `PZ-WS-001`, `PZ-GIT-001`, `PZ-MANT-001`, `PZ-GIT-002`, `PZ-MSI-001`).
 - Antes de implementar, hacer la pasada del **detractor senior** (`.hebrinex/agents/detractor-senior.md`) y mostrar su salida en el preflight.
 
 Formato del preflight (el del kernel):
@@ -73,6 +73,7 @@ Requiere SI: SI
 | `PZManager.exe` | `manager.py` compilado con PyInstaller (onefile, ventana propia). Está versionado: recompilarlo si cambia `manager.py`. |
 | `instalar.bat` + `instalar.ps1` | Instalador portable: .NET, WebView2, SteamCMD, servidor, catálogo y accesos directos. |
 | `crear_exe.bat` / `empaquetar.bat` | Compilar el exe / armar una copia distribuible en `dist\PZManager`. |
+| `crear_msi.bat` + `instalador\PZManager.wxs` | Instalador MSI por usuario (WiX 5, D-016) en `dist\`. El `UpgradeCode` y los GUID de componente son fijos: no cambiarlos. Nunca borrar `HKCU\Software\HebrineX` entero: tiene claves de otros programas del operador. |
 | `iniciar_*.bat`, `actualizar_servidor.bat`, `validar_mods.bat` | Atajos de desarrollo que necesitan Python. |
 | `initial_mods.json` | Catálogo semilla. Se copia a `data\mods.json` en el primer inicio. |
 | `mods_excluidos_sin_workshop_id.json` | Mods apartados por no tener Workshop ID. Se recuperan desde la pestaña Mods. |

@@ -13,6 +13,15 @@ App de escritorio para instalar, configurar y administrar un servidor dedicado d
 ## Instalación
 No hace falta Python ni permisos de administrador. Se necesita Windows 10/11 de 64 bits y unos 15 GB libres.
 
+### Con el instalador `.msi`
+1. Ejecutá `PZManager-<versión>.msi`. No tiene firma digital, así que Windows SmartScreen puede avisar: *Más información → Ejecutar de todos modos*.
+2. Elegí la carpeta. Por defecto es `%LOCALAPPDATA%\PZManager`; como ahí también va el servidor (unos 7 GB), conviene un disco con espacio, por ejemplo `D:\PZServer`. Se instala solo para tu usuario y no pide administrador.
+3. Al terminar, dejá marcada *Instalar ahora SteamCMD, el servidor…*: se abre una consola con `instalar.bat`, que baja WebView2 si falta, SteamCMD y el servidor, y después abre la app. Si la desmarcás, lo hacés más tarde desde el menú Inicio: *PZ Dedicated Manager → Instalar o reparar dependencias*.
+4. Seguí con el paso 3 de la lista de abajo (Inicio > Preparación).
+
+Un `.msi` más nuevo se instala encima, en la misma carpeta. Desinstalar (Configuración de Windows → Aplicaciones) saca los archivos del programa y sus accesos directos; la configuración (`data`), los logs, el servidor, SteamCMD, las copias (`backups`) y los mundos (`Zomboid`) quedan.
+
+### Con la carpeta portable
 1. Copiá la carpeta del paquete donde quieras tener el servidor, por ejemplo `D:\PZServer`. No uses Program Files.
 2. Ejecutá **`instalar.bat`**. El instalador:
    - comprueba Windows, el espacio libre y .NET Framework 4.7.2+;
@@ -47,6 +56,7 @@ Formato del catálogo (`id` es el Mod ID del `mod.info`; `enabled` y `notes` son
 |---|---|
 | `empaquetar.bat [destino] [catalogo.json]` | Compila el `.exe` y arma una versión limpia (por defecto en `dist\PZManager`) con `PZManager.exe`, `instalar.bat`, `instalar.ps1`, el catálogo y este README. Usa `data\mods.json` como catálogo si existe. |
 | `crear_exe.bat` | Instala pywebview y PyInstaller en tu usuario, genera `PZManager.exe` y escribe `version.json`. Volvé a ejecutarlo si modificás `manager.py`. |
+| `crear_msi.bat` | Arma `dist\PZManager-<versión>.msi` con WiX 5 (`instalador\PZManager.wxs`) a partir del `PZManager.exe` actual; antes comprueba que coincida con `version.json`. Necesita `dotnet tool install --global wix --version 5.0.2`; la extensión de interfaz la agrega sola. El `.msi` no se sube a git: compartilo como Release de GitHub o copiándolo. |
 | `iniciar_panel.bat` | Abre la app (`PZManager.exe`, o `manager.py` si todavía no generaste el .exe). |
 | `iniciar_servidor.bat` | Inicia el servidor en una consola: muestra la salida en vivo y lo que escribas se envía al servidor. Ctrl+C guarda y lo detiene. Requiere Python. |
 | `actualizar_servidor.bat` / `validar_mods.bat` | Actualizar con SteamCMD / validar el catálogo desde la consola. Requieren Python. |
